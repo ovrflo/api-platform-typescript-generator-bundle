@@ -110,6 +110,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
         $this->buildModelFiles();
         $this->buildEndpointFiles();
         $this->buildRouteFile();
+        $this->buildApiMethodsFile();
         $this->dispatchManipulateFilesEvent();
         $changedFileCount = $this->dumpFiles();
 
@@ -850,6 +851,17 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
         }
 
         $this->files['routes'] = implode("\n", $lines)."\n";
+    }
+
+    private function buildApiMethodsFile(): void
+    {
+        $content = file_get_contents(__DIR__ . '/../Resources/js/ApiMethods.ts');
+        $apiEntryPointUrl = $this->container->get(RouterInterface::class)->generate('api_entrypoint', referenceType: RouterInterface::ABSOLUTE_URL);
+        $parsed = parse_url($apiEntryPointUrl);
+        $finalUrl = sprintf('%s://%s%s', $parsed['scheme'], $parsed['host'], isset($parsed['port']) ? ':'.$parsed['port'] : '');
+        $content = str_replace('\'__API_BASE_URL__\'', json_encode($finalUrl), $content);
+
+        $this->files['ApiMethods'] = $content;
     }
 
     private function dumpFiles(): int
