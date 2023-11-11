@@ -2,8 +2,7 @@
   "name": "ovrflo/api-platform-typescript-generator-bundle",
   "type": "symfony-bundle",
   "description": "A Symfony bundle to generate TypeScript types for your API Platform project. It can generate models, endpoints, routes and a bit more.",
-  "minimum-stability": "stable",
-  "license": "proprietary",
+  "license": "MIT",
   "authors": [
     {
       "name": "Catalin Dan",
