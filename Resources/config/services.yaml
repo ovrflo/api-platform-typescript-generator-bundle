@@ -1,0 +1,8 @@
+services:
+    _defaults:
+        autowire: true
+        autoconfigure: true
+
+    Ovrflo\ApiPlatformTypescriptGeneratorBundle\Command\GenerateApiTypesCommand:
+        $projectDir: '%kernel.project_dir%'
+        $options: '%ovrflo_api_platform_typescript_generator.config%'

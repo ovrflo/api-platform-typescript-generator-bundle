@@ -1,0 +1,36 @@
+{
+  "name": "ovrflo/api-platform-typescript-generator-bundle",
+  "type": "symfony-bundle",
+  "description": "A Symfony bundle to generate TypeScript types for your API Platform project. It can generate models, endpoints, routes and a bit more.",
+  "minimum-stability": "stable",
+  "license": "proprietary",
+  "authors": [
+    {
+      "name": "Catalin Dan",
+      "email": "dancatalin18@gmail.com"
+    }
+  ],
+  "autoload": {
+    "psr-4": {
+      "Ovrflo\\ApiPlatformTypescriptGeneratorBundle\\": ""
+    }
+  },
+  "require": {
+    "api-platform/core": "^3.1",
+    "doctrine/orm": "^2.12",
+    "php": "^8.2",
+    "psr/clock": "^1.0",
+    "psr/container": "^1.0 || ^2.0",
+    "symfony/console": "^6.0 || ^7.0",
+    "symfony/filesystem": "^6.0 || ^7.0",
+    "symfony/event-dispatcher": "^6.0 || ^7.0",
+    "symfony/finder": "^6.0 || ^7.0",
+    "symfony/framework-bundle": "^6.0 || ^7.0",
+    "symfony/routing": "^6.0 || ^7.0",
+    "symfony/translation": "^6.0 || ^7.0",
+    "symfony/string": "^6.0 || ^7.0"
+  },
+  "bin": [
+    "bin/generate_api_types_watch.js"
+  ]
+}
