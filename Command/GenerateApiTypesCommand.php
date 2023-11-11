@@ -45,6 +45,7 @@ use function Symfony\Component\String\u;
 
 #[AsCommand(
     name: 'ovrflo:api-platform:typescript:generate',
+    description: 'Generate typescript types for api-platform resources/endpoints.',
 )]
 final class GenerateApiTypesCommand extends Command implements ServiceSubscriberInterface
 {
