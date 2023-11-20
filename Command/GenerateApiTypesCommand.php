@@ -9,6 +9,7 @@ use ApiPlatform\Metadata\ApiResource;
 use ApiPlatform\Metadata\Delete;
 use ApiPlatform\Metadata\Get;
 use ApiPlatform\Metadata\GetCollection;
+use ApiPlatform\Metadata\HttpOperation;
 use ApiPlatform\Metadata\Patch;
 use ApiPlatform\Metadata\Post;
 use ApiPlatform\Metadata\Property\Factory\PropertyMetadataFactoryInterface;
@@ -544,6 +545,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                     'securityPostDenormalize' => $resourceMetadata->getSecurityPostDenormalize(),
                 ];
                 foreach ($resourceMetadata->getOperations() as $operation) {
+                    /** @var HttpOperation $operation */
                     $operationName = match (true) {
                         $operation instanceof GetCollection => 'list',
                         $operation instanceof Get => 'read',
@@ -553,6 +555,9 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                         $operation instanceof Delete => 'remove',
                         default => throw new \InvalidArgumentException(sprintf('Unknown operation "%s".', get_debug_type($operation))),
                     };
+
+                    $inputFormats = $operation->getInputFormats();
+                    $isMultipart = isset($inputFormats['multipart']);
 
                     if ('list' === $operationName) {
                         $listTypeName = $resourceMetadata->getShortName() . 'ListParams';
@@ -643,6 +648,8 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                         'class' => $resourceName,
                         'input' => $operation->getInput(),
                         'output' => $operation->getOutput(),
+                        'isMultipart' => $isMultipart,
+                        'method' => $operation->getMethod(),
                     ];
                     if ($operationName === 'list') {
                         $this->operations[$resourceName]['operations'][$operationName]['listType'] = $listTypeName;
@@ -702,7 +709,12 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                 if ($resourceDefinition['securityPostDenormalize']) {
                     $lines[] = sprintf('// @securityPostDenormalize: %s', $resourceDefinition['securityPostDenormalize']);
                 }
-                $lines[] = sprintf('        %s: %s<%s>(%s),', $operationName, $operationName, implode(', ', $genericParams), implode(', ', $args));
+                if (!$operation['isMultipart']) {
+                    $lines[] = sprintf('        %s: %s<%s>(%s),', $operationName, $operationName, implode(', ', $genericParams), implode(', ', $args));
+                } else {
+                    $imports['ApiMethods']['multipart'] = 'multipart';
+                    $lines[] = sprintf('        %s: %s<%s>(%s, %s),', $operationName, 'multipart', implode(', ', $genericParams), json_encode(strtoupper($operation['method'])), implode(', ', $args));
+                }
             }
             $lines[] = '    }';
             $lines[] = '}';
