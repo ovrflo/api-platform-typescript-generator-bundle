@@ -12,6 +12,8 @@ try {
     console.log(e.message);
 }
 
+let cwd = process.cwd();
+
 let entryPoint;
 let arguments;
 let events = [];
@@ -25,12 +27,11 @@ if (runWithDocker) {
 } else {
     console.log('Docker container not running. Running natively...');
     entryPoint = 'php';
-    arguments = ['bin/console'];
+    arguments = [cwd + '/bin/console'];
 }
 
 // setup file watcher
-chokidar.watch([__dirname + '/../src', __dirname + '/../assets/vue/vue_routes.yaml', ]).on('all', (event, path) => {
-    // console.log(event, path);
+chokidar.watch([cwd + '/src', cwd + '/assets/vue/vue_routes.yaml', ]).on('all', (event, path) => {
     events.push({event, path});
 });
 
