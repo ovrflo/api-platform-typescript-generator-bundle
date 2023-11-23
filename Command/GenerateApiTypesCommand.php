@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Ovrflo\ApiPlatformTypescriptGeneratorBundle\Command;
 
 use ApiPlatform\Doctrine\Orm\Filter\FilterInterface;
+use ApiPlatform\Doctrine\Orm\Filter\OrderFilter;
+use ApiPlatform\Doctrine\Orm\Filter\SearchFilter;
 use ApiPlatform\Metadata\ApiResource;
 use ApiPlatform\Metadata\Delete;
 use ApiPlatform\Metadata\Get;
@@ -280,10 +282,47 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
             ],
         ];
 
+        $this->types['Order'] = [
+            'file' => 'interfaces/Enum',
+            'type' => 'enum',
+            'values' => [
+                'Asc' => 'asc',
+                'Desc' => 'desc',
+            ],
+        ];
+
         $this->types['ListParams'] = [
             'file' => 'interfaces/ApiTypes',
             'type' => 'interface',
+            'generic' => 'T extends HydraItem',
             'properties' => [
+            ],
+        ];
+
+        $apiPlatformConfiguration = [
+            'pagination' => [
+                'enabled' => $this->parameterBag->get('api_platform.collection.pagination.enabled'),
+                'clientEnabled' => $this->parameterBag->get('api_platform.collection.pagination.client_enabled'),
+                'clientPartialEnabled' => $this->parameterBag->get('api_platform.collection.pagination.client_partial'),
+                'pageParameter' => $this->parameterBag->get('api_platform.collection.pagination.page_parameter_name'),
+            ],
+            'itemsPerPage' => [
+                'enabled' => $this->parameterBag->get('api_platform.collection.pagination.client_items_per_page'),
+                'itemsPerPageParameter' => $this->parameterBag->get('api_platform.collection.pagination.items_per_page_parameter_name'),
+                'maximumItemsPerPage' => $this->parameterBag->get('api_platform.collection.pagination.maximum_items_per_page'),
+                'default' => $this->parameterBag->get('api_platform.collection.pagination.items_per_page'),
+            ],
+            'paginationClient' => [
+                'enabled' => $this->parameterBag->get('api_platform.collection.pagination.client_enabled'),
+                'parameter' => $this->parameterBag->get('api_platform.collection.pagination.enabled_parameter_name'),
+            ],
+            'partial' => [
+                'enabled' => $this->parameterBag->get('api_platform.collection.pagination.client_partial'),
+                'parameter' => $this->parameterBag->get('api_platform.collection.pagination.partial_parameter_name'),
+            ],
+            'order' => [
+                'parameter' => $this->parameterBag->get('api_platform.collection.order_parameter_name'),
+                'default' => $this->parameterBag->get('api_platform.collection.order'),
             ],
         ];
 
@@ -300,16 +339,26 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                 ];
             }
             if ($this->parameterBag->get('api_platform.collection.pagination.client_enabled')) {
+                $this->types['ListParams']['depends']['interfaces/Enum']['BooleanEnum'] = 'BooleanEnum';
                 $this->types['ListParams']['properties'][$this->parameterBag->get('api_platform.collection.pagination.enabled_parameter_name')] = [
                     'type' => 'BooleanEnum',
                 ];
             }
             if ($this->parameterBag->get('api_platform.collection.pagination.client_partial')) {
+                $this->types['ListParams']['depends']['interfaces/Enum']['BooleanEnum'] = 'BooleanEnum';
                 $this->types['ListParams']['properties'][$this->parameterBag->get('api_platform.collection.pagination.partial_parameter_name')] = [
                     'type' => 'BooleanEnum',
                 ];
             }
+
+            $this->types['ListParams']['depends']['interfaces/Enum']['Order'] = 'Order';
+            $this->types['ListParams']['properties'][$this->parameterBag->get('api_platform.collection.order_parameter_name')] = [
+                'type' => 'Record<string, Order>',
+            ];
         }
+
+        $this->fragments['interfaces/ApiTypes'] ??= ['fragments' => []];
+        $this->fragments['interfaces/ApiTypes']['fragments'][] = ['export const apiPlatformConfig = ' . json_encode($apiPlatformConfiguration, JSON_PRETTY_PRINT) . ';'];
     }
 
     private function extractModelMetadata(): void
@@ -385,6 +434,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
 
             $tsTypes = [];
             $depends = [];
+            $defaultValue = null;
 
             $builtinTypes = $propertyMetadata->getBuiltinTypes();
             foreach ($builtinTypes as $builtinType) {
@@ -394,6 +444,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
 
                 if ($builtinType->getBuiltinType() === 'string') {
                     $tsTypes[] = 'string';
+                    $defaultValue = json_encode($propertyMetadata->getDefault());
                     continue;
                 }
 
@@ -442,6 +493,9 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                         $tsTypes[] = $typeInfo['name'];
                         $depends[$typeInfo['file']][$typeInfo['name']] = $typeInfo['name'];
                         $generatedType['depends'][$typeInfo['file']][] = $typeInfo['name'];
+                        if ($propertyMetadata->getDefault()) {
+                            $defaultValue = $typeInfo['name'] . '.' . $propertyMetadata->getDefault()->name;
+                        }
                         continue;
                     }
 
@@ -479,6 +533,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                 'required' => $propertyMetadata->isRequired(),
                 'readOnly' => $propertyMetadata->isReadable() && !$propertyMetadata->isWritable(),
                 'depends' => $depends,
+                'default' => $defaultValue,
             ];
         }
 
@@ -570,7 +625,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                             'name' => $listTypeName,
                             'file' => 'endpoint/' . $resourceMetadata->getShortName(),
                             'type' => 'interface',
-                            'extends' => 'ListParams',
+                            'extends' => 'ListParams<'.$resourceMetadata->getShortName().'>',
                             'properties' => [],
                         ];
                         $this->operations[$resourceName]['depends']['interfaces/ApiTypes']['ListParams'] = 'ListParams';
@@ -579,50 +634,69 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                         foreach ($operation->getFilters() as $filterName) {
                             /** @var FilterInterface $filter */
                             $filter = $this->container->get('filters')->get($filterName);
-                            foreach ($filter->getDescription($resourceName) as $filteredField) {
-                                if (!isset($this->types[$resourceMetadata->getShortName()])) {
-                                    $this->extractModelMetadataForModel($resourceMetadata->getClass());
-                                }
-                                if (!isset($this->types[$resourceMetadata->getShortName()]['properties'][$filteredField['property']])) {
-                                    throw new \Exception(sprintf('Property "%s" of %s is not exposed or does not exist while being used in an ApiFilter. Did you #[Ignore] it?', $filteredField['property'], $resourceMetadata->getShortName()));
-                                }
-                                $propertyMetadata = $this->types[$resourceMetadata->getShortName()]['properties'][$filteredField['property']];
-                                foreach ($propertyMetadata['depends'] ?? [] as $file => $items) {
-                                    foreach ($items as $item) {
-                                        $this->operations[$resourceName]['depends'][$file][$item] = $item;
+                            if ($filter instanceof SearchFilter || $filter instanceof \ApiPlatform\Doctrine\Odm\Filter\SearchFilter) {
+                                foreach ($filter->getDescription($resourceName) as $filteredField) {
+                                    if (!isset($this->types[$resourceMetadata->getShortName()])) {
+                                        $this->extractModelMetadataForModel($resourceMetadata->getClass());
                                     }
-                                }
-                                $type = $filteredField['type'];
-                                if ($propertyMetadata['api_platform_schema'] && ($propertyMetadata['api_platform_schema']['type'] === $type || is_array($propertyMetadata['api_platform_schema']['type']) && in_array($type, $propertyMetadata['api_platform_schema']['type']))) {
-                                    $format = $propertyMetadata['api_platform_schema']['format'] ?? null;
-                                    if ($format === 'iri-reference') {
-                                        $type = 'HydraIri';
-                                    } else {
-                                        $type = $propertyMetadata['type'];
-                                        if (isset($this->types[$type]) && 'builtin' !== $this->types[$type]['type']) {
-                                            $this->operations[$resourceName]['depends'][$this->types[$type]['file']][] = $type;
+                                    if (!isset($this->types[$resourceMetadata->getShortName()]['properties'][$filteredField['property']])) {
+                                        throw new \Exception(sprintf('Property "%s" of %s is not exposed or does not exist while being used in an ApiFilter. Did you #[Ignore] it?', $filteredField['property'], $resourceMetadata->getShortName()));
+                                    }
+                                    $propertyMetadata = $this->types[$resourceMetadata->getShortName()]['properties'][$filteredField['property']];
+                                    foreach ($propertyMetadata['depends'] ?? [] as $file => $items) {
+                                        foreach ($items as $item) {
+                                            $this->operations[$resourceName]['depends'][$file][$item] = $item;
                                         }
                                     }
+                                    $type = $filteredField['type'];
+                                    if ($propertyMetadata['api_platform_schema'] && ($propertyMetadata['api_platform_schema']['type'] === $type || is_array($propertyMetadata['api_platform_schema']['type']) && in_array($type, $propertyMetadata['api_platform_schema']['type']))) {
+                                        $format = $propertyMetadata['api_platform_schema']['format'] ?? null;
+                                        if ($format === 'iri-reference') {
+                                            $type = 'HydraIri';
+                                        } else {
+                                            $type = $propertyMetadata['type'];
+                                            if (isset($this->types[$type]) && 'builtin' !== $this->types[$type]['type']) {
+                                                $this->operations[$resourceName]['depends'][$this->types[$type]['file']][] = $type;
+                                            }
+                                        }
+                                    }
+                                    $type = match ($type) {
+                                        'int' => 'number',
+                                        'float' => 'number',
+                                        'bool' => 'boolean',
+                                        default => $type,
+                                    };
+                                    if (!isset($filteredFields[$filteredField['property']])) {
+                                        $filteredFields[$filteredField['property']] = [
+                                            'type' => $type,
+                                            'types' => [$type],
+                                            'required' => $filteredField['required'],
+                                            'is_collection' => $filteredField['is_collection'],
+                                        ];
+                                    } else {
+                                        $filteredFields[$filteredField['property']]['types'][] = $type;
+                                        $filteredFields[$filteredField['property']]['types'] = array_unique($filteredFields[$filteredField['property']]['types']);
+                                        $filteredFields[$filteredField['property']]['required'] = $filteredField['required'] || $filteredFields[$filteredField['property']]['required'];
+                                        $filteredFields[$filteredField['property']]['is_collection'] = $filteredField['is_collection'] || $filteredFields[$filteredField['property']]['is_collection'];
+                                    }
                                 }
-                                $type = match ($type) {
-                                    'int' => 'number',
-                                    'float' => 'number',
-                                    'bool' => 'boolean',
-                                    default => $type,
-                                };
-                                if (!isset($filteredFields[$filteredField['property']])) {
-                                    $filteredFields[$filteredField['property']] = [
-                                        'type' => $type,
-                                        'types' => [$type],
-                                        'required' => $filteredField['required'],
-                                        'is_collection' => $filteredField['is_collection'],
-                                    ];
-                                } else {
-                                    $filteredFields[$filteredField['property']]['types'][] = $type;
-                                    $filteredFields[$filteredField['property']]['types'] = array_unique($filteredFields[$filteredField['property']]['types']);
-                                    $filteredFields[$filteredField['property']]['required'] = $filteredField['required'] || $filteredFields[$filteredField['property']]['required'];
-                                    $filteredFields[$filteredField['property']]['is_collection'] = $filteredField['is_collection'] || $filteredFields[$filteredField['property']]['is_collection'];
+                            } elseif ($filter instanceof OrderFilter || $filter instanceof \ApiPlatform\Doctrine\Odm\Filter\OrderFilter) {
+                                $this->operations[$resourceName]['depends']['interfaces/Enum']['Order'] = 'Order';
+                                $parameterName = null;
+                                $fields = [];
+                                foreach ($filter->getDescription($resourceName) as $fieldName => $field) {
+                                    if (!$parameterName) {
+                                        [$parameterName] = explode('[', $fieldName, 2);
+                                    }
+                                    $fields[] = '"'.$field['property'].'"';
                                 }
+                                $type = 'Record<' . implode('|', $fields) . ', Order>';
+                                $filteredFields[$parameterName] = [
+                                    'type' => $type,
+                                    'types' => [$type],
+                                    'required' => false,
+                                    'is_collection' => false,
+                                ];
                             }
 
                             unset($filteredField);
@@ -974,9 +1048,9 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                     $escapedPropertyName = sprintf('"%s"', $property);
                 }
 
-                $type = $propertyMetadata['type'];
-                if (isset($this->types[$type]) && $this->types[$type]['type'] !== 'builtin' && $filename !== $this->types[$type]['file']) {
-                    $imports[$this->types[$type]['file']][$type] = $type;
+                $propertyType = $propertyMetadata['type'];
+                if (isset($this->types[$propertyType]) && $this->types[$propertyType]['type'] !== 'builtin' && $filename !== $this->types[$propertyType]['file']) {
+                    $imports[$this->types[$propertyType]['file']][$propertyType] = $propertyType;
                 }
                 $isRequired = $propertyMetadata['required'] ?? false;
                 $isReadOnly = $propertyMetadata['readOnly'] ?? false;
@@ -985,10 +1059,22 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                     $isReadOnly ? 'readonly ' : '',
                     $escapedPropertyName,
                     $isRequired ? '' : '?',
-                    $type,
+                    $propertyType,
                 );
             }
 
+            $lines[] = '}';
+            $lines[] = '';
+            $lines[] = 'export function new' . $type . '('.lcfirst($type).': Partial<'.$type.'> = {}): Partial<' . $type . '> {';
+            $lines[] = sprintf('    return {');
+            foreach ($metadata['properties'] as $property => $propertyMetadata) {
+                if ($propertyMetadata['readOnly'] ?? false) {
+                    continue;
+                }
+                $lines[] = sprintf('        %s: %s,', $property, $propertyMetadata['default'] ?? 'null');
+            }
+            $lines[] = sprintf('        ...%s,', lcfirst($type));
+            $lines[] = sprintf('    } as Partial<%s>;', $type);
             $lines[] = '}';
 
             return $lines;
