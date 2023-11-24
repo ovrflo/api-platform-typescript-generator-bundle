@@ -165,10 +165,12 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                     'type' => 'HydraIri',
                     'format' => 'iri-reference',
                     'required' => false,
+                    'readOnly' => true,
                 ],
                 '@type' => [
                     'type' => 'string',
                     'required' => false,
+                    'readOnly' => true,
                 ],
             ],
         ];
@@ -413,18 +415,22 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
             'name' => $typeName,
             'file' => 'interfaces/' . $typeName,
             'class' => $resourceName,
+            'factory' => true,
             'type' => 'interface',
             'properties' => [],
-            'depends' => [
-                'interfaces/ApiTypes' => [
-                    'HydraItem',
-                ],
-            ],
-            'extends' => 'HydraItem',
             'doc_block' => [
                 '@see ' . str_replace($this->projectDir . '/', '', $reflection->getFileName()),
             ],
         ];
+
+        if ($resourceMetadata) {
+            $generatedType['extends'] = 'HydraItem';
+            $generatedType['depends'] = [
+                'interfaces/ApiTypes' => [
+                    'HydraItem',
+                ],
+            ];
+        }
 
         foreach ($this->container->get(PropertyNameCollectionFactoryInterface::class)->create($resourceName) as $propertyName) {
             $propertyMetadata = $this->container->get(PropertyMetadataFactoryInterface::class)->create($resourceName, $propertyName);
@@ -450,27 +456,32 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
 
                 if ($builtinType->getBuiltinType() === 'int' || $builtinType->getBuiltinType() === 'float') {
                     $tsTypes[] = 'number';
+                    $defaultValue = json_encode($propertyMetadata->getDefault());
                     continue;
                 }
 
                 if ($builtinType->getBuiltinType() === 'bool') {
                     $tsTypes[] = 'boolean';
+                    $defaultValue = json_encode($propertyMetadata->getDefault());
                     continue;
                 }
 
                 if ($builtinType->getBuiltinType() === 'null') {
                     $tsTypes[] = 'null';
+                    $defaultValue = json_encode($propertyMetadata->getDefault());
                     continue;
                 }
 
                 if ($builtinType->getBuiltinType() === 'array') {
                     $tsTypes[] = 'Array<any>';
+                    $defaultValue = json_encode($propertyMetadata->getDefault());
                     continue;
                 }
 
                 if ($builtinType->getBuiltinType() === 'object') {
                     if ($builtinType->isCollection()) {
                         $tsTypes[] = $this->resolveCollectionType($builtinType, $generatedType);
+                        $defaultValue = json_encode($propertyMetadata->getDefault());
                         continue;
                     }
 
@@ -714,14 +725,18 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                         }
                     }
 
+                    if ($output = ($operation->getOutput()['class'] ?? null)) {
+                        $this->extractModelMetadataForModel($output);
+                    }
+
                     $this->operations[$resourceName]['operations'][$operationName] = [
                         'method' => $operation->getMethod(),
                         'path' => preg_replace('#\{\._format}$#', '', $operation->getUriTemplate()),
                         'security' => $operation->getSecurity(),
                         'securityPostDenormalize' => $operation->getSecurityPostDenormalize(),
                         'class' => $resourceName,
-                        'input' => $operation->getInput(),
-                        'output' => $operation->getOutput(),
+                        'input' => $input ?? $resourceName,
+                        'output' => $output ?? $resourceName,
                         'isMultipart' => $isMultipart,
                         'method' => $operation->getMethod(),
                     ];
@@ -754,10 +769,10 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                 }
             }
             foreach ($resourceDefinition['operations'] as $operationName => $operation) {
-                $input = $operation['input'] ?? $operation['class'];
-                $output = $operation['output'] ?? $operation['class'];
                 $typeMap = [];
-                foreach (array_unique([$input, $output]) as $resource) {
+                $input = $operation['input'];
+                $output = $operation['output'];
+                foreach (array_filter(array_unique([$input, $output])) as $resource) {
                     $targetType = null;
                     foreach ($this->types as $type) {
                         if (($type['class'] ?? null) === $resource) {
@@ -774,6 +789,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                 $imports['ApiMethods'][$operationName] = $operationName;
                 $genericParams = match ($operationName) {
                     'list' => [$typeMap[$input] ?? 'any', $operation['listType']],
+                    'create', 'update', 'replace' => array_unique([$typeMap[$input] ?? 'any', $typeMap[$output] ?? $typeMap[$input] ?? 'any']),
                     default => [$typeMap[$input] ?? 'any']
                 };
                 $args = [json_encode($operation['path'], \JSON_UNESCAPED_SLASHES)];
@@ -1064,18 +1080,20 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
             }
 
             $lines[] = '}';
-            $lines[] = '';
-            $lines[] = 'export function new' . $type . '('.lcfirst($type).': Partial<'.$type.'> = {}): Partial<' . $type . '> {';
-            $lines[] = sprintf('    return {');
-            foreach ($metadata['properties'] as $property => $propertyMetadata) {
-                if ($propertyMetadata['readOnly'] ?? false) {
-                    continue;
+            if ($metadata['factory'] ?? false) {
+                $lines[] = '';
+                $lines[] = 'export function ' . lcfirst($type) . 'Factory('.lcfirst($type).': Partial<'.$type.'> = {}): Partial<' . $type . '> {';
+                $lines[] = sprintf('    return {');
+                foreach ($metadata['properties'] as $property => $propertyMetadata) {
+                    if ($propertyMetadata['readOnly'] ?? false) {
+                        continue;
+                    }
+                    $lines[] = sprintf('        %s: %s,', preg_match('#^[a-zA-Z][a-zA-Z0-9_]*$#', $property) ? $property : json_encode($property), $propertyMetadata['default'] ?? 'null');
                 }
-                $lines[] = sprintf('        %s: %s,', $property, $propertyMetadata['default'] ?? 'null');
+                $lines[] = sprintf('        ...%s,', lcfirst($type));
+                $lines[] = sprintf('    } as Partial<%s>;', $type);
+                $lines[] = '}';
             }
-            $lines[] = sprintf('        ...%s,', lcfirst($type));
-            $lines[] = sprintf('    } as Partial<%s>;', $type);
-            $lines[] = '}';
 
             return $lines;
         }
