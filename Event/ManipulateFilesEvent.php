@@ -10,7 +10,6 @@ final class ManipulateFilesEvent extends Event
 {
     public function __construct(
         public array $files,
-        public array $fragments,
     ) {
     }
 }

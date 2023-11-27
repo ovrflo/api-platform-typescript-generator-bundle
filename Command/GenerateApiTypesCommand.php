@@ -43,7 +43,6 @@ use Symfony\Component\Routing\RouterInterface;
 use Symfony\Component\Validator\Validator\ValidatorInterface;
 use Symfony\Contracts\Service\Attribute\SubscribedService;
 use Symfony\Contracts\Service\ServiceSubscriberInterface;
-use Symfony\Contracts\Translation\TranslatorInterface;
 use function Symfony\Component\String\u;
 
 #[AsCommand(
@@ -55,7 +54,6 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
     private array $types = [];
     private array $operations = [];
     private array $files = [];
-    private array $fragments = [];
 
     private ?InputInterface $input = null;
     private ?SymfonyStyle $io = null;
@@ -83,7 +81,6 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
             PropertyMetadataFactoryInterface::class,
             ClockInterface::class,
             RouterInterface::class,
-            TranslatorInterface::class,
             ValidatorInterface::class,
             EventDispatcherInterface::class,
             new SubscribedService('filters', ContainerInterface::class, attributes: new Autowire(service: 'api_platform.filter_locator')),
@@ -128,19 +125,18 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
 
     private function dispatchManipulateMetadataEvent(): void
     {
-        $event = new ManipulateMetadataEvent($this->types, $this->operations, $this->fragments);
+        $event = new ManipulateMetadataEvent($this->types, $this->operations, $this->files);
         $this->container->get(EventDispatcherInterface::class)->dispatch($event);
         $this->types = $event->types;
         $this->operations = $event->operations;
-        $this->fragments = $event->fragments;
+        $this->files = $event->files;
     }
 
     private function dispatchManipulateFilesEvent(): void
     {
-        $event = new ManipulateFilesEvent($this->files, $this->fragments);
+        $event = new ManipulateFilesEvent($this->files);
         $this->container->get(EventDispatcherInterface::class)->dispatch($event);
         $this->files = $event->files;
-        $this->fragments = $event->fragments;
     }
 
     private function loadBaseMetadata(): void
@@ -359,8 +355,8 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
             ];
         }
 
-        $this->fragments['interfaces/ApiTypes'] ??= ['fragments' => []];
-        $this->fragments['interfaces/ApiTypes']['fragments'][] = ['export const apiPlatformConfig = ' . json_encode($apiPlatformConfiguration, JSON_PRETTY_PRINT) . ';'];
+        $this->files['interfaces/ApiTypes'] ??= [];
+        $this->files['interfaces/ApiTypes'][] = ['body' => 'export const apiPlatformConfig = ' . json_encode($apiPlatformConfiguration, JSON_PRETTY_PRINT) . ';'];
     }
 
     private function extractModelMetadata(): void
@@ -725,6 +721,10 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                         }
                     }
 
+                    if ($input = ($operation->getInput()['class'] ?? null)) {
+                        $this->extractModelMetadataForModel($input);
+                    }
+
                     if ($output = ($operation->getOutput()['class'] ?? null)) {
                         $this->extractModelMetadataForModel($output);
                     }
@@ -822,11 +822,9 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                 $lines = [...$typeLines, '', ...$lines];
             }
 
-            if ($importLines) {
-                $lines = [...$importLines, '', ...$lines];
-            }
-
-            $this->files[$resourceDefinition['file']] = implode("\n", $lines) . "\n";
+            $this->files[$resourceDefinition['file']] ??= [];
+            $this->files[$resourceDefinition['file']][] = ['body' => implode("\n", $importLines)."\n", 'priority' => 1000];
+            $this->files[$resourceDefinition['file']][] = ['body' => implode("\n", $lines)."\n"];
         }
     }
 
@@ -875,17 +873,13 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                     $targetFileDir = dirname($this->outputDir . $file);
                     $importsBody[] = sprintf('import { %s } from "%s";', implode(', ', $typeNames), $this->filesystem->makePathRelative($targetFileDir, $currentFileDir) . basename($file));
                 }
-
-                $fileBody = [...$importsBody, '', ...$fileBody];
             }
 
-            if (isset($this->fragments[$fileName]['fragments'])) {
-                foreach ($this->fragments[$fileName]['fragments'] as $key => $fragment) {
-                    $fileBody = [...$fileBody, '', ...$fragment];
-                }
+            $this->files[$fileName] ??= [];
+            if ($importsBody) {
+                $this->files[$fileName][] = ['body' => implode("\n", $importsBody)."\n", 'priority' => 1000];
             }
-
-            $this->files[$fileName] = implode("\n", $fileBody)."\n";
+            $this->files[$fileName][] = ['body' => implode("\n", $fileBody)."\n"];
         }
     }
 
@@ -946,13 +940,8 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
             $lines[] = sprintf('export const %s: RouteInterface = %s;', $typescriptName, json_encode($config));
         }
 
-        if (isset($this->fragments['routes']['fragments'])) {
-            foreach ($this->fragments['routes']['fragments'] as $key => $fragment) {
-                $lines = [...$lines, '', ...$fragment];
-            }
-        }
-
-        $this->files['routes'] = implode("\n", $lines)."\n";
+        $this->files['routes'] ??= [];
+        $this->files['routes'][] = ['body' => implode("\n", $lines)."\n"];
     }
 
     private function buildApiMethodsFile(): void
@@ -963,7 +952,8 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
         $finalUrl = sprintf('%s://%s%s', $parsed['scheme'], $parsed['host'], isset($parsed['port']) ? ':'.$parsed['port'] : '');
         $content = str_replace('\'__API_BASE_URL__\'', json_encode($finalUrl), $content);
 
-        $this->files['ApiMethods'] = $content;
+        $this->files['ApiMethods'] ??= [];
+        $this->files['ApiMethods'][] = ['body' => $content];
     }
 
     private function dumpFiles(): int
@@ -973,7 +963,15 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
         }
 
         $changed = 0;
-        foreach ($this->files as $fileName => $fileBody) {
+        foreach ($this->files as $fileName => $fragments) {
+            usort($fragments, static fn ($a, $b) => -1 * (($a['priority'] ?? 100) <=> ($b['priority'] ?? 100)));
+            $fragmentBodies = array_map(static fn ($fragment) => trim($fragment['body'], "\n"), $fragments);
+            $fileBody = trim(implode("\n\n", $fragmentBodies), "\n") . "\n";
+
+            if (!$fileBody) {
+                continue;
+            }
+
             $relativePath = 'assets/api/' . $fileName . '.ts';
             $path = $this->projectDir . '/' . $relativePath;
             $existingFile = $this->filesystem->exists($path) ? file_get_contents($path) : null;
@@ -1082,7 +1080,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
             $lines[] = '}';
             if ($metadata['factory'] ?? false) {
                 $lines[] = '';
-                $lines[] = 'export function ' . lcfirst($type) . 'Factory('.lcfirst($type).': Partial<'.$type.'> = {}): Partial<' . $type . '> {';
+                $lines[] = 'export function ' . lcfirst($type) . 'Factory('.lcfirst($type).': Partial<'.$type.'> = {}): ' . $type . ' {';
                 $lines[] = sprintf('    return {');
                 foreach ($metadata['properties'] as $property => $propertyMetadata) {
                     if ($propertyMetadata['readOnly'] ?? false) {
@@ -1091,7 +1089,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                     $lines[] = sprintf('        %s: %s,', preg_match('#^[a-zA-Z][a-zA-Z0-9_]*$#', $property) ? $property : json_encode($property), $propertyMetadata['default'] ?? 'null');
                 }
                 $lines[] = sprintf('        ...%s,', lcfirst($type));
-                $lines[] = sprintf('    } as Partial<%s>;', $type);
+                $lines[] = sprintf('    } as %s;', $type);
                 $lines[] = '}';
             }
 

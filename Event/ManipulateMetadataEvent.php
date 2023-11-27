@@ -11,7 +11,7 @@ final class ManipulateMetadataEvent extends Event
     public function __construct(
         public array $types,
         public array $operations,
-        public array $fragments,
+        public array $files,
     ) {
     }
 }
