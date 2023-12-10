@@ -12,6 +12,7 @@ use ApiPlatform\Metadata\Delete;
 use ApiPlatform\Metadata\Get;
 use ApiPlatform\Metadata\GetCollection;
 use ApiPlatform\Metadata\HttpOperation;
+use ApiPlatform\Metadata\NotExposed;
 use ApiPlatform\Metadata\Patch;
 use ApiPlatform\Metadata\Post;
 use ApiPlatform\Metadata\Property\Factory\PropertyMetadataFactoryInterface;
@@ -561,7 +562,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
         return $this->types[$typeName] = $generatedType;
     }
 
-    private function buildTypeFromEnum(string $enum): array
+    public function buildTypeFromEnum(string $enum): array
     {
         $typeName = u($enum)
             ->trimPrefix('App\\')
@@ -621,6 +622,10 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                     'securityPostDenormalize' => $resourceMetadata->getSecurityPostDenormalize(),
                 ];
                 foreach ($resourceMetadata->getOperations() as $operation) {
+                    if ($operation instanceof NotExposed) {
+                        continue;
+                    }
+
                     /** @var HttpOperation $operation */
                     $operationName = match (true) {
                         $operation instanceof GetCollection => 'list',
@@ -1054,7 +1059,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
         return $changed;
     }
 
-    private function buildType(string $type, array $metadata, string $filename, array &$imports): array
+    public function buildType(string $type, array $metadata, string $filename, array &$imports): array
     {
         if ($metadata['type'] === 'type') {
             return [sprintf('export type %s = %s;', $type, $metadata['alias'])];
