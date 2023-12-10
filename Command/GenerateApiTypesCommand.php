@@ -40,6 +40,7 @@ use Symfony\Component\HttpFoundation\File\File;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\PropertyInfo\Type;
 use Symfony\Component\Routing\RouterInterface;
+use Symfony\Component\Serializer\Mapping\Factory\ClassMetadataFactoryInterface;
 use Symfony\Component\Validator\Validator\ValidatorInterface;
 use Symfony\Contracts\Service\Attribute\SubscribedService;
 use Symfony\Contracts\Service\ServiceSubscriberInterface;
@@ -83,6 +84,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
             RouterInterface::class,
             ValidatorInterface::class,
             EventDispatcherInterface::class,
+            ClassMetadataFactoryInterface::class,
             new SubscribedService('filters', ContainerInterface::class, attributes: new Autowire(service: 'api_platform.filter_locator')),
         ];
     }
@@ -413,25 +415,36 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
             'class' => $resourceName,
             'factory' => true,
             'type' => 'interface',
+            'extends' => [],
             'properties' => [],
             'doc_block' => [
                 '@see ' . str_replace($this->projectDir . '/', '', $reflection->getFileName()),
             ],
         ];
 
+        $parentType = null;
+        if ($reflection->getParentClass()) {
+            $parentType = $this->extractModelMetadataForModel($reflection->getParentClass()->getName());
+            $generatedType['extends'][] = $parentType['name'];
+            $generatedType['depends'][$parentType['file']] = [$parentType['name']];
+        }
+
         if ($resourceMetadata) {
-            $generatedType['extends'] = 'HydraItem';
-            $generatedType['depends'] = [
-                'interfaces/ApiTypes' => [
-                    'HydraItem',
-                ],
-            ];
+            $generatedType['extends'][] = 'HydraItem';
+            $generatedType['depends']['interfaces/ApiTypes'][] = 'HydraItem';
         }
 
         foreach ($this->container->get(PropertyNameCollectionFactoryInterface::class)->create($resourceName) as $propertyName) {
             $propertyMetadata = $this->container->get(PropertyMetadataFactoryInterface::class)->create($resourceName, $propertyName);
             if (!$propertyMetadata->isReadable() && !$propertyMetadata->isWritable()) {
                 continue;
+            }
+
+            $isOwnProperty = true;
+            try {
+                $reflectionProperty = $reflection->getProperty($propertyName);
+                $isOwnProperty = $reflectionProperty->getDeclaringClass()->name === $reflection->name;
+            } catch (\Throwable) {
             }
 
             $tsTypes = [];
@@ -470,14 +483,14 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
 
                 if ($builtinType->getBuiltinType() === 'array') {
                     $tsTypes[] = 'Array<any>';
-                    $defaultValue = json_encode($propertyMetadata->getDefault());
+                    $defaultValue = '[]';
                     continue;
                 }
 
                 if ($builtinType->getBuiltinType() === 'object') {
                     if ($builtinType->isCollection()) {
                         $tsTypes[] = $this->resolveCollectionType($builtinType, $generatedType);
-                        $defaultValue = json_encode($propertyMetadata->getDefault());
+                        $defaultValue = '[]';
                         continue;
                     }
 
@@ -541,6 +554,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                 'readOnly' => $propertyMetadata->isReadable() && !$propertyMetadata->isWritable(),
                 'depends' => $depends,
                 'default' => $defaultValue,
+                'is_own_property' => $isOwnProperty,
             ];
         }
 
@@ -632,7 +646,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                             'name' => $listTypeName,
                             'file' => 'endpoint/' . $resourceMetadata->getShortName(),
                             'type' => 'interface',
-                            'extends' => 'ListParams<'.$resourceMetadata->getShortName().'>',
+                            'extends' => ['ListParams<'.$resourceMetadata->getShortName().'>'],
                             'properties' => [],
                         ];
                         $this->operations[$resourceName]['depends']['interfaces/ApiTypes']['ListParams'] = 'ListParams';
@@ -1052,11 +1066,15 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                 $lines[] = sprintf('// %s', $docBlockLine);
             }
             if ($metadata['generic'] ?? null) {
-                $lines[] = sprintf('export interface %s<' . $metadata['generic'] . '>%s {', $type, isset($metadata['extends']) ? ' extends ' . $metadata['extends'] : '');
+                $lines[] = sprintf('export interface %s<' . $metadata['generic'] . '>%s {', $type, isset($metadata['extends']) && $metadata['extends'] ? ' extends ' . implode(', ', $metadata['extends']) : '');
             } else {
-                $lines[] = sprintf('export interface %s%s {', $type, isset($metadata['extends']) ? ' extends ' . $metadata['extends'] : '');
+                $lines[] = sprintf('export interface %s%s {', $type, isset($metadata['extends']) && $metadata['extends'] ? ' extends ' . implode(', ', $metadata['extends']) : '');
             }
             foreach ($metadata['properties'] as $property => $propertyMetadata) {
+                if (false === ($propertyMetadata['is_own_property'] ?? true)) {
+                    continue;
+                }
+
                 $escapedPropertyName = $property;
                 if (str_starts_with($property, '@') || str_contains($property, ':')) {
                     $escapedPropertyName = sprintf('"%s"', $property);
