@@ -484,6 +484,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
 
                 if ($builtinType->getBuiltinType() === 'array') {
                     $tsTypes[] = 'Array<any>';
+                    $tsTypes[] = 'Record<number|string, any>';
                     $defaultValue = '[]';
                     continue;
                 }
