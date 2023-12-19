@@ -491,7 +491,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
 
                 if ($builtinType->getBuiltinType() === 'object') {
                     if ($builtinType->isCollection()) {
-                        $tsTypes[] = $this->resolveCollectionType($builtinType, $generatedType);
+                        $tsTypes[] = $this->resolveCollectionType($builtinType, $generatedType, $reflection->getName());
                         $defaultValue = '[]';
                         continue;
                     }
@@ -530,8 +530,10 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                     if ($doctrineMetadata) {
                         $typeInfo = $this->extractModelMetadataForModel($builtinType->getClassName());
                         $tsTypes[] = $typeInfo['name'];
-                        $depends[$typeInfo['file']][$typeInfo['name']] = $typeInfo['name'];
-                        $generatedType['depends'][$typeInfo['file']][$typeInfo['name']] = $typeInfo['name'];
+                        if ($builtinType->getClassName() !== $reflection->getName()) {
+                            $depends[$typeInfo['file']][$typeInfo['name']] = $typeInfo['name'];
+                            $generatedType['depends'][$typeInfo['file']][$typeInfo['name']] = $typeInfo['name'];
+                        }
                         if (in_array($builtinType->getClassName(), iterator_to_array($this->container->get(ResourceNameCollectionFactoryInterface::class)->create()))) {
                             $tsTypes[] = 'HydraIri';
                             $depends['interfaces/ApiTypes']['HydraIri'] = 'HydraIri';
@@ -546,7 +548,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                     continue;
                 }
 
-                throw new \InvalidArgumentException(sprintf('Unknown builtin type "%s".', $builtinType->getClassName() ?? $builtinType->getBuiltinType()));
+                throw new \InvalidArgumentException(sprintf('Unknown builtin type "%s" on %s::%s.', $builtinType->getClassName() ?? $builtinType->getBuiltinType(), $resourceName, $propertyName));
             }
 
             $generatedType['properties'][$propertyName] = [
@@ -613,7 +615,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
             }
 
             foreach ($this->container->get(ResourceMetadataCollectionFactoryInterface::class)->create($resourceName) as $resourceMetadata) {
-                $this->operations[$resourceName] = [
+                $this->operations[$resourceName] ??= [
                     'name' => $resourceMetadata->getShortName(),
                     'file' => 'endpoint/' . $resourceMetadata->getShortName(),
                     'operations' => [],
@@ -763,7 +765,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                     if ($operationName === 'list') {
                         $this->operations[$resourceName]['operations'][$operationName]['listType'] = $listTypeName;
                     } elseif (in_array($operationName, ['read', 'replace', 'update'])) {
-                        $this->operations[$resourceName]['operations'][$operationName]['path'] = preg_replace('#/\{.+?}$#', '', $this->operations[$resourceName]['operations'][$operationName]['path']);
+                        $this->operations[$resourceName]['operations'][$operationName]['path'] = preg_replace('#/\{[a-zA-Z0-9_]+?}$#', '', $this->operations[$resourceName]['operations'][$operationName]['path']);
                     }
                 }
             }
@@ -787,6 +789,9 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                 foreach ($types as $type) {
                     $imports[$file][$type] = $type;
                 }
+            }
+            if (!$resourceDefinition['operations']) {
+                continue;
             }
             foreach ($resourceDefinition['operations'] as $operationName => $operation) {
                 $typeMap = [];
@@ -1165,7 +1170,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
         throw new \InvalidArgumentException(sprintf('Unknown type "%s".', $metadata['type']));
     }
 
-    private function resolveCollectionType(Type $type, array &$generatedType): string
+    private function resolveCollectionType(Type $type, array &$generatedType, string $selfClass): string
     {
         $keyType = $type->getCollectionKeyTypes()[0]->getBuiltinType();
         $isArray = $keyType === 'int';
@@ -1181,7 +1186,9 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
             if ($doctrineMetadata) {
                 $doctrineMetadata = $this->extractModelMetadataForModel($valueType->getClassName());
                 $actualValueType = $doctrineMetadata['name'];
-                $generatedType['depends'][$doctrineMetadata['file']][] = $actualValueType;
+                if ($valueType->getClassName() !== $selfClass) {
+                    $generatedType['depends'][$doctrineMetadata['file']][] = $actualValueType;
+                }
             }
         }
 
