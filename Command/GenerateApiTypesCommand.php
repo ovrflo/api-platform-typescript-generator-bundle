@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ovrflo\ApiPlatformTypescriptGeneratorBundle\Command;
 
+use ApiPlatform\Doctrine\Orm\Filter\DateFilter;
 use ApiPlatform\Doctrine\Orm\Filter\FilterInterface;
 use ApiPlatform\Doctrine\Orm\Filter\OrderFilter;
 use ApiPlatform\Doctrine\Orm\Filter\SearchFilter;
@@ -726,21 +727,44 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                                     'required' => false,
                                     'is_collection' => false,
                                 ];
-                            }
-
-                            unset($filteredField);
-                            foreach ($filteredFields as &$filteredField) {
-                                if (count($filteredField['types']) > 1) {
-                                    $filteredField['type'] = implode('|', $filteredField['types']);
+                            } elseif ($filter instanceof DateFilter || $filter instanceof \ApiPlatform\Doctrine\Odm\Filter\DateFilter) {
+                                $this->operations[$resourceName]['depends']['interfaces/Enum']['DateTime'] = 'DateTime';
+                                $parameters = [];
+                                foreach ($filter->getDescription($resourceName) as $fieldName => $field) {
+                                    [, $subfield] = explode('[', $fieldName, 2);
+                                    $subfield = rtrim($subfield, ']');
+                                    $parameters[$field['property']] ??= [];
+                                    $parameters[$field['property']][] = '"'.$subfield.'"';
                                 }
-                                if ($filteredField['is_collection']) {
-                                    $filteredField['type'] .= '|Array<' . $filteredField['type'] . '>';
+
+                                foreach ($parameters as $parameterName => $subfields) {
+                                    if (isset($filteredFields[$parameterName])) {
+                                        dump($filteredFields[$parameterName]);
+                                    }
+
+                                    $type = 'Partial<Record<' . implode('|', $subfields) . ', DateTime>>';
+                                    $filteredFields[$parameterName] = [
+                                        'type' => $type,
+                                        'types' => [$type],
+                                        'required' => false,
+                                        'is_collection' => false,
+                                    ];
                                 }
                             }
-                            unset($filteredField);
-
-                            $this->operations[$resourceName]['types'][$listTypeName]['properties'] = $filteredFields;
                         }
+
+                        unset($filteredField);
+                        foreach ($filteredFields as &$filteredField) {
+                            if (count($filteredField['types']) > 1) {
+                                $filteredField['type'] = implode('|', $filteredField['types']);
+                            }
+                            if ($filteredField['is_collection']) {
+                                $filteredField['type'] .= '|Array<' . $filteredField['type'] . '>';
+                            }
+                        }
+                        unset($filteredField);
+
+                        $this->operations[$resourceName]['types'][$listTypeName]['properties'] = $filteredFields;
                     }
 
                     if ($input = ($operation->getInput()['class'] ?? null)) {
