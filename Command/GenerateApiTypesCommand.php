@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ovrflo\ApiPlatformTypescriptGeneratorBundle\Command;
 
+use ApiPlatform\Doctrine\Orm\Filter\BooleanFilter;
 use ApiPlatform\Doctrine\Orm\Filter\DateFilter;
 use ApiPlatform\Doctrine\Orm\Filter\FilterInterface;
 use ApiPlatform\Doctrine\Orm\Filter\OrderFilter;
@@ -720,7 +721,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                                     }
                                     $fields[] = '"'.$field['property'].'"';
                                 }
-                                $type = 'Record<' . implode('|', $fields) . ', Order>';
+                                $type = 'Partial<Record<' . implode('|', $fields) . ', Order>>';
                                 $filteredFields[$parameterName] = [
                                     'type' => $type,
                                     'types' => [$type],
@@ -746,6 +747,15 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                                     $filteredFields[$parameterName] = [
                                         'type' => $type,
                                         'types' => [$type],
+                                        'required' => false,
+                                        'is_collection' => false,
+                                    ];
+                                }
+                            } elseif ($filter instanceof BooleanFilter || $filter instanceof \ApiPlatform\Doctrine\Odm\Filter\BooleanFilter) {
+                                foreach ($filter->getDescription($resourceName) as $fieldName => $field) {
+                                    $filteredFields[$field['property']] = [
+                                        'type' => 'boolean',
+                                        'types' => ['boolean'],
                                         'required' => false,
                                         'is_collection' => false,
                                     ];
@@ -807,8 +817,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
             if ($resourceDefinition['security']) {
                 $lines[] = sprintf('// %s', $resourceDefinition['security']);
             }
-            $lines[] = 'export default {';
-            $lines[] = sprintf('    %s: {', lcfirst($resourceDefinition['name']));
+            $lines[] = sprintf('export const %s = {', lcfirst($resourceDefinition['name']));
             foreach ($resourceDefinition['depends'] ?? [] as $file => $types) {
                 foreach ($types as $type) {
                     $imports[$file][$type] = $type;
@@ -843,19 +852,18 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                 };
                 $args = [json_encode($operation['path'], \JSON_UNESCAPED_SLASHES)];
                 if ($operation['security']) {
-                    $lines[] = sprintf('        // @security: %s', $operation['security']);
+                    $lines[] = sprintf('    // @security: %s', $operation['security']);
                 }
                 if ($resourceDefinition['securityPostDenormalize']) {
                     $lines[] = sprintf('// @securityPostDenormalize: %s', $resourceDefinition['securityPostDenormalize']);
                 }
                 if (!$operation['isMultipart']) {
-                    $lines[] = sprintf('        %s: %s<%s>(%s),', $operationName, $operationName, implode(', ', $genericParams), implode(', ', $args));
+                    $lines[] = sprintf('    %s: %s<%s>(%s),', $operationName, $operationName, implode(', ', $genericParams), implode(', ', $args));
                 } else {
                     $imports['ApiMethods']['multipart'] = 'multipart';
-                    $lines[] = sprintf('        %s: %s<%s>(%s, %s),', $operationName, 'multipart', implode(', ', $genericParams), json_encode(strtoupper($operation['method'])), implode(', ', $args));
+                    $lines[] = sprintf('    %s: %s<%s>(%s, %s),', $operationName, 'multipart', implode(', ', $genericParams), json_encode(strtoupper($operation['method'])), implode(', ', $args));
                 }
             }
-            $lines[] = '    }';
             $lines[] = '}';
 
             foreach ($resourceDefinition['types'] ?? [] as $typeName => $typeDefinition) {
@@ -935,7 +943,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
     private function buildRouteFile(): void
     {
         $lines = [
-            'import {RouteInterface} from "./Router";',
+            'import {RouteInterface,LocaleAwareRouteInterface} from "./Router";',
             'import type { Component } from \'vue\';',
             'import {RouteRecordRaw} from "vue-router";',
             '',
@@ -947,6 +955,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
             '',
         ];
 
+        $routeGroups = [];
         $eventDispatcher = $this->container->get(EventDispatcherInterface::class);
         foreach ($this->container->get(RouterInterface::class)->getRouteCollection()->all() as $name => $route) {
             $typescriptName = $name;
@@ -954,7 +963,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                 continue;
             }
 
-            $typescriptName = u($typescriptName)->snake()->upper()->toString();
+            $typescriptName = u($typescriptName)->snake()->upper()->trim('_')->toString();
             $config = ['name' => $name, 'path' => $route->getPath(), 'vars' => new \ArrayObject(), 'defaults' => new \ArrayObject(), 'meta' => new \ArrayObject()];
             $config['path'] = preg_replace_callback('#\{(.+?)}#', function (array $matches) use (&$config, $route) {
                 $name = $matches[1];
@@ -986,7 +995,26 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
             $config = $event->typescriptName;
             $config = $event->config;
 
+            if (\preg_match('#^(?<route>.+?)\\.(?<locale>\\w{2,3}(?:_\\w{2,3})?)$#', $name, $matches)
+                && $route->hasRequirement('_locale')
+                && $route->getRequirement('_locale') === $matches['locale']
+            ) {
+                $routeGroups[$matches['route']] ??= [];
+                $routeGroups[$matches['route']][$matches['locale']] = $config;
+            }
+
             $lines[] = sprintf('export const %s: RouteInterface = %s;', $typescriptName, json_encode($config));
+        }
+
+        foreach ($routeGroups as $routeName => $locales) {
+            $typescriptName = u($routeName)->snake()->upper()->trim('_')->toString();
+            $finalRouteConfig = $locales[$this->parameterBag->get('kernel.default_locale')] ?? reset($locales);
+            $finalRouteConfig['name'] = $routeName;
+            $finalRouteConfig['paths'] = array_combine(
+                array_keys($locales),
+                array_map(static fn ($locale) => $locales[$locale]['path'], array_keys($locales)),
+            );
+            $lines[] = sprintf('export const %s: LocaleAwareRouteInterface = %s;', $typescriptName, json_encode($finalRouteConfig));
         }
 
         $this->files['routes'] ??= [];
