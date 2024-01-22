@@ -453,11 +453,18 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
             $tsTypes = [];
             $depends = [];
             $defaultValue = null;
+            $extraProps = [
+                'is_collection' => false,
+                'collection_type' => null,
+                'is_nullable' => false,
+                'enum' => null,
+            ];
 
             $builtinTypes = $propertyMetadata->getBuiltinTypes();
             foreach ($builtinTypes as $builtinType) {
                 if ($builtinType->isNullable()) {
                     $tsTypes[] = 'null';
+                    $extraProps['nullable'] = true;
                 }
 
                 if ($builtinType->getBuiltinType() === 'string') {
@@ -488,12 +495,16 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                     $tsTypes[] = 'Array<any>';
                     $tsTypes[] = 'Record<number|string, any>';
                     $defaultValue = '[]';
+                    $extraProps['is_collection'] = true;
                     continue;
                 }
 
                 if ($builtinType->getBuiltinType() === 'object') {
                     if ($builtinType->isCollection()) {
-                        $tsTypes[] = $this->resolveCollectionType($builtinType, $generatedType, $reflection->getName());
+                        $extraProps['is_collection'] = true;
+                        $extraProps['collection_type'] = $reflection->getName();
+                        $collectionType = $this->resolveCollectionType($builtinType, $generatedType, $reflection->getName(), $extraProps);
+                        $tsTypes[] = $collectionType;
                         $defaultValue = '[]';
                         continue;
                     }
@@ -520,6 +531,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                         if ($propertyMetadata->getDefault()) {
                             $defaultValue = $typeInfo['name'] . '.' . $propertyMetadata->getDefault()->name;
                         }
+                        $extraProps['enum'] = ['class' => $builtinType->getClassName(), 'name' => $typeInfo['name']];
                         continue;
                     }
 
@@ -532,6 +544,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                     if ($doctrineMetadata) {
                         $typeInfo = $this->extractModelMetadataForModel($builtinType->getClassName());
                         $tsTypes[] = $typeInfo['name'];
+                        $extraProps['model'] = ['class' => $builtinType->getClassName(), 'name' => $typeInfo['name']];
                         if ($builtinType->getClassName() !== $reflection->getName()) {
                             $depends[$typeInfo['file']][$typeInfo['name']] = $typeInfo['name'];
                             $generatedType['depends'][$typeInfo['file']][$typeInfo['name']] = $typeInfo['name'];
@@ -553,14 +566,17 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                 throw new \InvalidArgumentException(sprintf('Unknown builtin type "%s" on %s::%s.', $builtinType->getClassName() ?? $builtinType->getBuiltinType(), $resourceName, $propertyName));
             }
 
+            $tsTypes = array_unique($tsTypes);
             $generatedType['properties'][$propertyName] = [
                 'type' => implode('|', $tsTypes ?: ['any']),
+                'types' => $tsTypes,
                 'api_platform_schema' => $propertyMetadata->getSchema(),
                 'required' => $propertyMetadata->isRequired(),
                 'readOnly' => $propertyMetadata->isReadable() && !$propertyMetadata->isWritable(),
                 'depends' => $depends,
                 'default' => $defaultValue,
                 'is_own_property' => $isOwnProperty,
+                ...$extraProps,
             ];
         }
 
@@ -1222,7 +1238,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
         throw new \InvalidArgumentException(sprintf('Unknown type "%s".', $metadata['type']));
     }
 
-    private function resolveCollectionType(Type $type, array &$generatedType, string $selfClass): string
+    private function resolveCollectionType(Type $type, array &$generatedType, string $selfClass, array &$extraProps): string
     {
         $keyType = $type->getCollectionKeyTypes()[0]->getBuiltinType();
         $isArray = $keyType === 'int';
@@ -1238,6 +1254,8 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
             if ($doctrineMetadata) {
                 $doctrineMetadata = $this->extractModelMetadataForModel($valueType->getClassName());
                 $actualValueType = $doctrineMetadata['name'];
+                $extraProps['is_collection'] = true;
+                $extraProps['model'] = ['class' => $valueType->getClassName(), 'name' => $actualValueType];
                 if ($valueType->getClassName() !== $selfClass) {
                     $generatedType['depends'][$doctrineMetadata['file']][] = $actualValueType;
                 }
