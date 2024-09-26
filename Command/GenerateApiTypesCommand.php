@@ -26,6 +26,7 @@ use ApiPlatform\Metadata\Property\Factory\PropertyNameCollectionFactoryInterface
 use ApiPlatform\Metadata\Put;
 use ApiPlatform\Metadata\Resource\Factory\ResourceMetadataCollectionFactoryInterface;
 use ApiPlatform\Metadata\Resource\Factory\ResourceNameCollectionFactoryInterface;
+use Composer\InstalledVersions;
 use Doctrine\ORM\EntityManagerInterface;
 use Ovrflo\ApiPlatformTypescriptGeneratorBundle\Event\ManipulateFilesEvent;
 use Ovrflo\ApiPlatformTypescriptGeneratorBundle\Event\ManipulateMetadataEvent;
@@ -67,6 +68,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
     private ?InputInterface $input = null;
     private ?SymfonyStyle $io = null;
     private readonly string $outputDir;
+    private readonly bool $isSupportedApiPlatform;
 
     public function __construct(
         private readonly ContainerInterface $container,
@@ -85,9 +87,9 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
         return [
             EntityManagerInterface::class,
             ResourceNameCollectionFactoryInterface::class,
-            ResourceMetadataCollectionFactoryInterface::class,
+            new SubscribedService(ResourceMetadataCollectionFactoryInterface::class, ResourceMetadataCollectionFactoryInterface::class, true),
             PropertyNameCollectionFactoryInterface::class,
-            PropertyMetadataFactoryInterface::class,
+            new SubscribedService(PropertyMetadataFactoryInterface::class, PropertyMetadataFactoryInterface::class, true),
             ClockInterface::class,
             RouterInterface::class,
             ValidatorInterface::class,
@@ -106,13 +108,25 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
+        $this->input = $input;
+        $this->io = new SymfonyStyle($input, $output);
+
         if (!$this->filesystem->exists($this->outputDir)) {
             $this->filesystem->mkdir($this->outputDir);
         }
 
-        $this->input = $input;
-        $this->io = new SymfonyStyle($input, $output);
+        if (!InstalledVersions::isInstalled('api-platform/core')) {
+            throw new \RuntimeException('api-platform/core is not installed. Make sure you have api-platform/core:^2.6.');
+        }
+
+        $this->isSupportedApiPlatform = version_compare(InstalledVersions::getVersion('api-platform/core'), '3.0.0', '>=');
+
         $this->io->writeln('Generating <info>API</info> types...');
+
+        if (!$this->isSupportedApiPlatform) {
+            $this->io->note('api-platform/core version is not supported. Most features will not be available.');
+        }
+
         $this->loadBaseMetadata();
         $this->extractModelMetadata();
         $this->extractOperationMetadata();
@@ -220,7 +234,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
     private function loadBaseMetadata(): void
     {
         // hydra prefix can be disabled in >=3.4 and <4.0
-        $defaultApiPlatformSerializerContext = $this->parameterBag->get('api_platform.serializer.default_context');
+        $defaultApiPlatformSerializerContext = $this->parameterBag->has('api_platform.serializer.default_context') ? $this->parameterBag->get('api_platform.serializer.default_context') : [];
         $hydraPrefix = ($defaultApiPlatformSerializerContext['hydra_prefix'] ?? true) ? 'hydra:' : '';
 
         $this->types = [
@@ -475,6 +489,11 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
     {
         if (!$this->options['model_metadata']['namespaces'] && $this->io->isVerbose()) {
             $this->io->note('No namespaces configured for model metadata extraction. Skipping.');
+            return;
+        }
+
+        if (!$this->isSupportedApiPlatform) {
+            $this->io->note('api-platform/core version is not supported. Skipping metadata generation.');
             return;
         }
 
@@ -744,6 +763,11 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
 
     private function extractOperationMetadata(): void
     {
+        if (!$this->isSupportedApiPlatform) {
+            $this->io->note('api-platform/core version is not supported. Skipping endpoint generation.');
+            return;
+        }
+
         $apiPrefix = $this->options['api_prefix'] ?? '';
         foreach ($this->container->get(ResourceNameCollectionFactoryInterface::class)->create() as $resourceName) {
             $matchingNamespaces = array_filter(
@@ -1099,6 +1123,10 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
 
     private function linkDependantOperations(): void
     {
+        if (!$this->operations) {
+            return;
+        }
+
         $apiPrefix = $this->options['api_prefix'] ?? '';
         foreach ($this->container->get(ResourceNameCollectionFactoryInterface::class)->create() as $resourceName) {
             $matchingNamespaces = array_filter(
@@ -1339,7 +1367,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                 continue;
             }
 
-            $typescriptName = u($typescriptName)->snake()->upper()->trim('_')->toString();
+            $typescriptName = u($typescriptName)->snake()->replaceMatches('#[^\w_]#', '_')->upper()->trim('_')->toString();
             $config = ['name' => $name, 'path' => $route->getPath(), 'vars' => new \ArrayObject(), 'defaults' => new \ArrayObject(), 'meta' => new \ArrayObject()];
             $config['path'] = preg_replace_callback('#\{(.+?)}#', function (array $matches) use (&$config, $route) {
                 $name = $matches[1];
@@ -1383,7 +1411,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
         }
 
         foreach ($routeGroups as $routeName => $locales) {
-            $typescriptName = u($routeName)->snake()->upper()->trim('_')->toString();
+            $typescriptName = u($routeName)->snake()->replaceMatches('#[^\w_]#', '_')->upper()->trim('_')->toString();
             $finalRouteConfig = $locales[$this->parameterBag->get('kernel.default_locale')] ?? reset($locales);
             $finalRouteConfig['name'] = $routeName;
             $finalRouteConfig['paths'] = array_combine(
@@ -1449,8 +1477,8 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                 continue;
             }
 
-            $relativePath = 'assets/api/' . $fileName . '.ts';
-            $path = $this->projectDir . '/' . $relativePath;
+            $relativePath = $fileName . '.ts';
+            $path = $this->outputDir . '/' . $relativePath;
             $existingFile = $this->filesystem->exists($path) ? file_get_contents($path) : null;
 
             if ($existingFile) {
@@ -1499,7 +1527,9 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
             $changed++;
         }
 
-        $existingFiles = iterator_to_array((new Finder())->in([$this->outputDir . 'interfaces', $this->outputDir . 'endpoint'])->name('*.ts'));
+        $dirs = array_values(array_filter([$this->outputDir . 'interfaces', $this->outputDir . 'endpoint'], fn ($dir) => $this->filesystem->exists($dir)));
+
+        $existingFiles = $dirs ? iterator_to_array((new Finder())->in($dirs)->name('*.ts')) : [];
         foreach ($existingFiles as $existingFile) {
             $fullPath = (string) $existingFile;
             $relativePath = str_replace($this->outputDir, '', $fullPath);
