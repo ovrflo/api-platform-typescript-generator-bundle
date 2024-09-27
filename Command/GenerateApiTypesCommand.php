@@ -66,6 +66,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
     private array $files = [];
 
     private ?InputInterface $input = null;
+    private ?OutputInterface $output = null;
     private ?SymfonyStyle $io = null;
     private readonly string $outputDir;
     private readonly bool $isSupportedApiPlatform;
@@ -109,6 +110,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $this->input = $input;
+        $this->output = $output;
         $this->io = new SymfonyStyle($input, $output);
 
         if (!$this->filesystem->exists($this->outputDir)) {
@@ -217,7 +219,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
 
     private function dispatchManipulateMetadataEvent(): void
     {
-        $event = new ManipulateMetadataEvent($this->outputDir, $this->types, $this->operations, $this->files);
+        $event = new ManipulateMetadataEvent($this->outputDir, $this->types, $this->operations, $this->files, $this->output);
         $this->container->get(EventDispatcherInterface::class)->dispatch($event);
         $this->types = $event->types;
         $this->operations = $event->operations;
@@ -226,7 +228,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
 
     private function dispatchManipulateFilesEvent(): void
     {
-        $event = new ManipulateFilesEvent($this->outputDir, $this->files);
+        $event = new ManipulateFilesEvent($this->outputDir, $this->files, $this->output);
         $this->container->get(EventDispatcherInterface::class)->dispatch($event);
         $this->files = $event->files;
     }
@@ -1379,7 +1381,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                 $typescriptName = 'COMPAT_'.$typescriptName;
             }
 
-            $event = new ManipulateRouteMetadataEvent($name, $route, $typescriptName, $config);
+            $event = new ManipulateRouteMetadataEvent($name, $route, $typescriptName, $config, true, $this->output);
             $eventDispatcher->dispatch($event);
             if (!$event->shouldGenerate) {
                 continue;
