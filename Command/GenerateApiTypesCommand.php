@@ -217,7 +217,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
 
     private function dispatchManipulateMetadataEvent(): void
     {
-        $event = new ManipulateMetadataEvent($this->types, $this->operations, $this->files);
+        $event = new ManipulateMetadataEvent($this->outputDir, $this->types, $this->operations, $this->files);
         $this->container->get(EventDispatcherInterface::class)->dispatch($event);
         $this->types = $event->types;
         $this->operations = $event->operations;
@@ -226,7 +226,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
 
     private function dispatchManipulateFilesEvent(): void
     {
-        $event = new ManipulateFilesEvent($this->files);
+        $event = new ManipulateFilesEvent($this->outputDir, $this->files);
         $this->container->get(EventDispatcherInterface::class)->dispatch($event);
         $this->files = $event->files;
     }
@@ -257,10 +257,9 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
         $this->types['HydraItem'] = [
             'file' => 'interfaces/ApiTypes',
             'type' => 'interface',
-            'generic' => 'T',
             'properties' => [
                 '@id' => [
-                    'type' => 'HydraIri<T>',
+                    'type' => 'HydraIri<this>',
                     'format' => 'iri-reference',
                     'required' => false,
                     'readOnly' => true,
@@ -278,7 +277,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
             'generic' => 'T extends HydraItem',
             'properties' => [
                 '@id' => [
-                    'type' => 'HydraIri',
+                    'type' => 'HydraIri<T>',
                     'format' => 'iri-reference',
                     'required' => true,
                 ],
@@ -288,7 +287,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                     'required' => true,
                 ],
                 '@context' => [
-                    'type' => 'HydraIri',
+                    'type' => 'HydraIri<T>',
                     'required' => true,
                 ],
                 $hydraPrefix.'totalItems' => [
@@ -300,7 +299,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                     'required' => true,
                 ],
                 $hydraPrefix.'view' => [
-                    'type' => 'HydraView',
+                    'type' => 'HydraView<T>',
                 ],
             ],
         ];
@@ -308,25 +307,26 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
         $this->types['HydraView'] = [
             'file' => 'interfaces/ApiTypes',
             'type' => 'interface',
+            'generic' => 'T',
             'properties' => [
                 '@type' => [
                     'type' => 'string',
                     'enum' => [$hydraPrefix.'PartialCollectionView'],
                 ],
                 '@id' => [
-                    'type' => 'HydraIri',
+                    'type' => 'HydraIri<T>',
                     'format' => 'iri-reference',
                 ],
                 $hydraPrefix.'first' => [
-                    'type' => 'HydraIri',
+                    'type' => 'HydraIri<T>',
                     'format' => 'iri-reference',
                 ],
                 $hydraPrefix.'last' => [
-                    'type' => 'HydraIri',
+                    'type' => 'HydraIri<T>',
                     'format' => 'iri-reference',
                 ],
                 $hydraPrefix.'next' => [
-                    'type' => 'HydraIri',
+                    'type' => 'HydraIri<T>',
                     'format' => 'iri-reference',
                 ],
             ],
@@ -1345,18 +1345,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
     private function buildRouteFile(): void
     {
         $importLines = [
-            'import {RouteInterface,LocaleAwareRouteInterface} from "./Router";',
-            'import type { Component } from \'vue\';',
-            'import {RouteRecordRaw} from "vue-router";',
-        ];
-
-        $lines = [
-            'declare global {',
-            '    interface Window {',
-            '        resolveVueComponent: (name: string) => Promise<Component>;',
-            '    }',
-            '}',
-            '',
+            'import {RouteInterface, LocaleAwareRouteInterface} from "./Router";',
         ];
 
         $routeGroups = [];

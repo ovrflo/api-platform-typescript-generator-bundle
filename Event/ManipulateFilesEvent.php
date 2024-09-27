@@ -9,6 +9,7 @@ use Symfony\Contracts\EventDispatcher\Event;
 final class ManipulateFilesEvent extends Event
 {
     public function __construct(
+        public string $outputDir,
         public array $files,
     ) {
     }
