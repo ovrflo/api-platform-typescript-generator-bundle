@@ -1346,6 +1346,10 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
 
     private function buildRouteFile(): void
     {
+        if (!$this->options['routes']['enabled']) {
+            return;
+        }
+
         $importLines = [
             'import {RouteInterface, LocaleAwareRouteInterface} from "./Router";',
         ];

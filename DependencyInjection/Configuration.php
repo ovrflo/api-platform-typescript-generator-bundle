@@ -40,6 +40,9 @@ class Configuration implements ConfigurationInterface
                         ->end()
                     ->end()
                 ->end()
+                ->arrayNode('routes')
+                    ->canBeDisabled()
+                ->end()
             ->end();
 
         return $treeBuilder;
