@@ -43,6 +43,11 @@ class Configuration implements ConfigurationInterface
                 ->arrayNode('routes')
                     ->canBeDisabled()
                 ->end()
+                ->arrayNode('import_types')
+                    ->info('Types to import into API')
+                    ->stringPrototype()
+                    ->end()
+                ->end()
             ->end();
 
         return $treeBuilder;

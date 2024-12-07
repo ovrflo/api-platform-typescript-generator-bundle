@@ -130,6 +130,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
         }
 
         $this->loadBaseMetadata();
+        $this->extractRequestedTypes();
         $this->extractModelMetadata();
         $this->extractOperationMetadata();
         $this->linkDependantOperations();
@@ -149,6 +150,19 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
         }
 
         return Command::SUCCESS;
+    }
+
+    private function extractRequestedTypes(): void
+    {
+        foreach ($this->options['import_types'] as $class) {
+            if (enum_exists($class)) {
+                $this->buildTypeFromEnum($class);
+            } elseif (class_exists($class)) {
+                $this->extractModelMetadataForModel($class);
+            } else {
+                $this->io->warning(sprintf('Class "%s" not found.', $class));
+            }
+        }
     }
 
     private function addPayloadManipulationMethods(): void
@@ -554,7 +568,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                 'short_name' => $resourceMetadata->getShortName(),
             ] : [],
             'doc_block' => [
-                '@see ' . str_replace($this->projectDir . '/', '', $reflection->getFileName()),
+                '@see ' . str_replace($this->projectDir . '/', '', $reflection->getFileName() ?: 'n/a'),
             ],
         ];
 
@@ -659,11 +673,18 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
                         continue;
                     }
 
+                    if ($builtinType->getClassName() && is_a($builtinType->getClassName(), \SplFileInfo::class, true)) {
+                        $tsTypes[] = 'any';
+                        continue;
+                    }
+
                     if ($builtinType->getClassName() && enum_exists($builtinType->getClassName())) {
                         $typeInfo = $this->buildTypeFromEnum($builtinType->getClassName(), 'interfaces/' . $typeName);
                         $tsTypes[] = $typeInfo['name'];
-                        $depends[$typeInfo['file']][$typeInfo['name']] = $typeInfo['name'];
-                        $generatedType['depends'][$typeInfo['file']][] = $typeInfo['name'];
+                        if ($typeInfo['file'] !== $generatedType['file']) {
+                            $depends[$typeInfo['file']][$typeInfo['name']] = $typeInfo['name'];
+                            $generatedType['depends'][$typeInfo['file']][] = $typeInfo['name'];
+                        }
                         if ($propertyMetadata->getDefault()) {
                             $defaultValue = $typeInfo['name'] . '.' . $propertyMetadata->getDefault()->name;
                         }
@@ -1498,7 +1519,7 @@ final class GenerateApiTypesCommand extends Command implements ServiceSubscriber
 
                 $body = implode("\n", $body);
 
-                if ($body === $fileBody) {
+                if (trim($body) === trim($fileBody)) {
                     continue;
                 }
 
