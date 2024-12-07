@@ -16,7 +16,7 @@
   },
   "require": {
     "api-platform/core": "^2.7 || ^3.1 || ^4.0",
-    "doctrine/orm": "^2.12",
+    "doctrine/orm": "^2.12 || ^3.0",
     "php": "^8.2",
     "psr/clock": "^1.0",
     "psr/container": "^1.0 || ^2.0",
